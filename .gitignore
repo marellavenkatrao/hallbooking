@@ -1,1 +1,7 @@
 node_modules
+.vercel
+dist
+client/dist
+.env
+.DS_Store
+*.log

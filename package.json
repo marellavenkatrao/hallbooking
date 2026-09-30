@@ -5,11 +5,18 @@
   "scripts": {
     "dev": "concurrently -n \"SERVER,CLIENT\" -c \"magenta,blue\" \"npm start --prefix server\" \"npm run dev --prefix client\"",
     "start": "concurrently -n \"SERVER,CLIENT\" -c \"magenta,blue\" \"npm start --prefix server\" \"npm run dev --prefix client\"",
+    "build": "cd client && npm install && npm run build",
     "server": "npm start --prefix server",
     "client": "npm run dev --prefix client",
     "seed": "npm run seed --prefix server"
   },
   "dependencies": {
-    "concurrently": "^8.2.2"
+    "bcryptjs": "^2.4.3",
+    "concurrently": "^8.2.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.3.4"
   }
 }

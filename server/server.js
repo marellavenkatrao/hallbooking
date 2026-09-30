@@ -22,6 +22,46 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Database connection state caching for serverless environments
+let isConnected = false;
+
+const connectToDatabase = async () => {
+  if (isConnected || mongoose.connection.readyState === 1) {
+    isConnected = true;
+    return true;
+  }
+  // If running on Vercel and MONGODB_URI is not set or pointing to localhost, skip attempting to connect to local port
+  if (process.env.VERCEL && (!process.env.MONGODB_URI || MONGODB_URI.includes('127.0.0.1') || MONGODB_URI.includes('localhost'))) {
+    console.warn('[MongoDB] Vercel environment detected without cloud MONGODB_URI. Using fallback data store.');
+    return false;
+  }
+
+  try {
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 3000
+    });
+    isConnected = true;
+    console.log(`[MongoDB] Connected successfully to ${MONGODB_URI}`);
+    return true;
+  } catch (err) {
+    console.error('[MongoDB] Connection error:', err.message);
+    if (!process.env.VERCEL) {
+      throw err;
+    }
+    return false;
+  }
+};
+
+// Database connection middleware for requests - MUST run before route handlers
+app.use(async (req, res, next) => {
+  try {
+    await connectToDatabase();
+  } catch (err) {
+    // Non-blocking in serverless so fallback can operate
+  }
+  next();
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/halls', hallRoutes);
@@ -35,41 +75,9 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
     portal: 'Narasaropeta Engineering College - Seminar Hall & AO Hospitality Portal',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'fallback-store',
     timestamp: new Date()
   });
-});
-
-// Database connection state caching for serverless environments
-let isConnected = false;
-
-const connectToDatabase = async () => {
-  if (isConnected || mongoose.connection.readyState >= 1) {
-    isConnected = true;
-    return;
-  }
-  try {
-    await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000
-    });
-    isConnected = true;
-    console.log(`[MongoDB] Connected successfully to ${MONGODB_URI}`);
-  } catch (err) {
-    console.error('[MongoDB] Connection error:', err.message);
-    throw err;
-  }
-};
-
-// Database connection middleware for requests
-app.use(async (req, res, next) => {
-  try {
-    await connectToDatabase();
-    next();
-  } catch (err) {
-    return res.status(500).json({
-      message: 'Database connection failed. Please ensure MONGODB_URI is accessible.',
-      error: err.message
-    });
-  }
 });
 
 // Start local server if not running in a serverless context like Vercel

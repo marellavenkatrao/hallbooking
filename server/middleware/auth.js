@@ -13,7 +13,18 @@ const authMiddleware = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     
-    const user = await User.findById(decoded.id).populate('assignedHall');
+    let user;
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1) {
+      user = await User.findById(decoded.id).populate('assignedHall');
+    } else {
+      const { findMockUserById } = require('../fallbackStore');
+      const mockU = findMockUserById(decoded.id);
+      if (mockU) {
+        user = { ...mockU, save: async () => {} };
+      }
+    }
+
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }

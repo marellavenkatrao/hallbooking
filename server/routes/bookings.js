@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const HallBooking = require('../models/HallBooking');
 const SeminarHall = require('../models/SeminarHall');
 const { authMiddleware } = require('../middleware/auth');
+const { mockHalls, mockBookings } = require('../fallbackStore');
 
 // Helper to get local date string YYYY-MM-DD
 function getLocalDateString() {
@@ -56,11 +57,15 @@ router.post('/', authMiddleware, async (req, res) => {
 
     // Robust Hall Lookup (by ObjectId, Code 'BLOCK-2', or shorthand 'b2')
     let hall = null;
-    if (mongoose.isValidObjectId(hallId)) {
-      hall = await SeminarHall.findById(hallId);
+    if (mongoose.connection.readyState === 1) {
+      if (mongoose.isValidObjectId(hallId)) {
+        hall = await SeminarHall.findById(hallId);
+      }
+    } else {
+      hall = mockHalls.find(h => h._id === hallId || h.code === hallId);
     }
     
-    if (!hall) {
+    if (!hall && mongoose.connection.readyState === 1) {
       const codeStr = hallId.toString().trim().toUpperCase();
       const normalizedCode = codeStr.startsWith('BLOCK-') ? codeStr : `BLOCK-${codeStr.replace(/[^0-9]/g, '')}`;
       hall = await SeminarHall.findOne({
@@ -70,6 +75,9 @@ router.post('/', authMiddleware, async (req, res) => {
           { name: new RegExp(codeStr.replace('-', ' '), 'i') }
         ]
       });
+    } else if (!hall) {
+      const codeStr = hallId.toString().trim().toUpperCase();
+      hall = mockHalls.find(h => h.name.toUpperCase().includes(codeStr) || h.code === codeStr);
     }
 
     if (!hall) {
@@ -87,34 +95,36 @@ router.post('/', authMiddleware, async (req, res) => {
       slotConflictConditions.push({ slot: 'FN' }, { slot: 'AN' });
     }
 
-    const conflict = await HallBooking.findOne({
-      hall: resolvedHallId,
-      status: 'APPROVED',
-      $or: slotConflictConditions,
-      $and: [
-        {
-          $or: [
-            { fromDate: { $lte: effectiveToDate } },
-            { date: { $lte: effectiveToDate } }
-          ]
-        },
-        {
-          $or: [
-            { toDate: { $gte: effectiveFromDate } },
-            { date: { $gte: effectiveFromDate } }
-          ]
-        }
-      ]
-    });
-
-    if (conflict) {
-      const conflictDateRange = (conflict.fromDate && conflict.toDate && conflict.fromDate !== conflict.toDate)
-        ? `${conflict.fromDate} to ${conflict.toDate}`
-        : (conflict.date || conflict.fromDate);
-      return res.status(409).json({ 
-        message: `Seminar Hall is already booked and approved for '${conflict.eventName}' (${conflict.slot}) on ${conflictDateRange}`,
-        conflict
+    if (mongoose.connection.readyState === 1) {
+      const conflict = await HallBooking.findOne({
+        hall: resolvedHallId,
+        status: 'APPROVED',
+        $or: slotConflictConditions,
+        $and: [
+          {
+            $or: [
+              { fromDate: { $lte: effectiveToDate } },
+              { date: { $lte: effectiveToDate } }
+            ]
+          },
+          {
+            $or: [
+              { toDate: { $gte: effectiveFromDate } },
+              { date: { $gte: effectiveFromDate } }
+            ]
+          }
+        ]
       });
+
+      if (conflict) {
+        const conflictDateRange = (conflict.fromDate && conflict.toDate && conflict.fromDate !== conflict.toDate)
+          ? `${conflict.fromDate} to ${conflict.toDate}`
+          : (conflict.date || conflict.fromDate);
+        return res.status(409).json({ 
+          message: `Seminar Hall is already booked and approved for '${conflict.eventName}' (${conflict.slot}) on ${conflictDateRange}`,
+          conflict
+        });
+      }
     }
 
     const isMultiDay = effectiveFromDate !== effectiveToDate;
@@ -148,7 +158,12 @@ router.post('/', authMiddleware, async (req, res) => {
       coordinator: hall.coordinator
     });
 
-    await newBooking.save();
+    if (mongoose.connection.readyState === 1) {
+      await newBooking.save();
+    } else {
+      mockBookings.unshift(newBooking.toObject ? newBooking.toObject() : newBooking);
+    }
+
     res.status(201).json({ 
       message: `Booking request successfully submitted to Coordinator (${hall.coordinatorName})`, 
       booking: newBooking 
@@ -179,13 +194,29 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     // AO and Admin can view all bookings
 
-    const bookings = await HallBooking.find(query)
-      .populate('hall')
-      .populate('hod', 'name email department phone')
-      .populate('coordinator', 'name email phone')
-      .sort({ createdAt: -1 });
+    if (mongoose.connection.readyState === 1) {
+      const bookings = await HallBooking.find(query)
+        .populate('hall')
+        .populate('hod', 'name email department phone')
+        .populate('coordinator', 'name email phone')
+        .sort({ createdAt: -1 });
 
-    res.json({ bookings });
+      return res.json({ bookings });
+    }
+
+    let list = [...mockBookings];
+    if (req.user.role === 'HOD') {
+      list = list.filter(b => b.hod === req.user._id || b.department === req.user.department);
+    } else if (req.user.role === 'COORDINATOR') {
+      if (req.user.assignedHall) {
+        const hId = req.user.assignedHall._id || req.user.assignedHall;
+        list = list.filter(b => b.hall === hId);
+      }
+    }
+    if (status) {
+      list = list.filter(b => b.status === status);
+    }
+    res.json({ bookings: list });
   } catch (err) {
     res.status(500).json({ message: 'Error retrieving bookings', error: err.message });
   }
@@ -324,10 +355,19 @@ router.put('/:id/cancel', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'This booking is already cancelled' });
     }
 
-    booking.status = 'CANCELLED';
-    booking.cancellationReason = cancellationReason || 'Cancelled by Department HOD';
-    booking.cancelledAt = new Date();
-    await booking.save();
+    if (mongoose.connection.readyState === 1) {
+      booking.status = 'CANCELLED';
+      booking.cancellationReason = cancellationReason || 'Cancelled by Department HOD';
+      booking.cancelledAt = new Date();
+      await booking.save();
+    } else {
+      const bk = mockBookings.find(b => b._id === req.params.id);
+      if (bk) {
+        bk.status = 'CANCELLED';
+        bk.cancellationReason = cancellationReason || 'Cancelled by Department HOD';
+        bk.cancelledAt = new Date();
+      }
+    }
 
     res.json({ 
       message: `Booking request '${booking.eventName}' has been successfully cancelled.`, 

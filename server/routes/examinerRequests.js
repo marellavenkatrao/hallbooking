@@ -68,6 +68,9 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 });
 
+const mongoose = require('mongoose');
+const { mockExaminerRequests } = require('../fallbackStore');
+
 // Get requests
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -83,12 +86,23 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     // AO and others can view all
 
-    const requests = await ExaminerRequest.find(query)
-      .populate('hod', 'name email department phone')
-      .populate('aoOfficer', 'name email designation phone')
-      .sort({ createdAt: -1 });
+    if (mongoose.connection.readyState === 1) {
+      const requests = await ExaminerRequest.find(query)
+        .populate('hod', 'name email department phone')
+        .populate('aoOfficer', 'name email designation phone')
+        .sort({ createdAt: -1 });
 
-    res.json({ requests });
+      return res.json({ requests });
+    }
+
+    let list = [...mockExaminerRequests];
+    if (req.user.role === 'HOD') {
+      list = list.filter(r => r.hod === req.user._id);
+    }
+    if (status) {
+      list = list.filter(r => r.status === status);
+    }
+    res.json({ requests: list });
   } catch (err) {
     res.status(500).json({ message: 'Error fetching hospitality requests', error: err.message });
   }

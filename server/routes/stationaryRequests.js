@@ -77,12 +77,22 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     // AO sees all requests across all departments
 
-    const requests = await StationaryRequest.find(query)
-      .populate('requestedBy', 'name email department designation phone')
-      .populate('aoOfficer', 'name email designation phone')
-      .sort({ createdAt: -1 });
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1) {
+      const requests = await StationaryRequest.find(query)
+        .populate('requestedBy', 'name email department designation phone')
+        .populate('aoOfficer', 'name email designation phone')
+        .sort({ createdAt: -1 });
 
-    res.json({ requests });
+      return res.json({ requests });
+    }
+
+    const { mockStationaryRequests } = require('../fallbackStore');
+    let list = [...mockStationaryRequests];
+    if (req.user.role === 'HOD') {
+      list = list.filter(r => r.requestedBy === req.user._id);
+    }
+    res.json({ requests: list });
   } catch (err) {
     res.status(500).json({ message: 'Error retrieving stationery requisitions', error: err.message });
   }
